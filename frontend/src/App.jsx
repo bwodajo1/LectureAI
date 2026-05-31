@@ -1,13 +1,15 @@
 import { useState, useRef, useCallback } from "react";
 
 const API_BASE = "/api";
+const TABS = ["Summary", "Flashcards"];
 
-function LoadingSpinner() {
+function LoadingSpinner({ task }) {
+  const msgs = { summary: "Summarizing your lecture...", flashcards: "Generating flashcards..." };
   return (
     <div style={{ textAlign: "center", padding: "48px 24px" }}>
       <div style={{ width: 40, height: 40, margin: "0 auto 16px", border: "3px solid #eee", borderTop: "3px solid #3b82f6", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      <p style={{ color: "#888", fontSize: 14, margin: 0 }}>Summarizing your lecture...</p>
+      <p style={{ color: "#888", fontSize: 14, margin: 0 }}>{msgs[task]}</p>
     </div>
   );
 }
@@ -29,14 +31,57 @@ function SummaryView({ data }) {
   );
 }
 
+function FlashcardsView({ data }) {
+  const [flipped, setFlipped] = useState({});
+  const [current, setCurrent] = useState(0);
+  const cards = data.flashcards;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+        <span style={{ fontSize: 13, color: "#888" }}>Card {current + 1} of {cards.length}</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setCurrent(c => Math.max(0, c - 1))} disabled={current === 0}
+            style={{ padding: "6px 14px", borderRadius: 8, border: "0.5px solid #ddd", background: "white", cursor: current === 0 ? "not-allowed" : "pointer", opacity: current === 0 ? 0.4 : 1 }}>←</button>
+          <button onClick={() => setCurrent(c => Math.min(cards.length - 1, c + 1))} disabled={current === cards.length - 1}
+            style={{ padding: "6px 14px", borderRadius: 8, border: "0.5px solid #ddd", background: "white", cursor: current === cards.length - 1 ? "not-allowed" : "pointer", opacity: current === cards.length - 1 ? 0.4 : 1 }}>→</button>
+        </div>
+      </div>
+
+      <div onClick={() => setFlipped(f => ({ ...f, [current]: !f[current] }))}
+        style={{ cursor: "pointer", minHeight: 180, padding: "32px 28px", borderRadius: 12, border: `2px solid ${flipped[current] ? "#86efac" : "#ddd"}`, background: flipped[current] ? "#f0fdf4" : "white", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center", transition: "all 0.15s ease" }}>
+        <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.08em", color: "#aaa", marginBottom: 12, textTransform: "uppercase" }}>
+          {flipped[current] ? "Answer" : "Question"}
+        </span>
+        <p style={{ fontSize: 16, lineHeight: 1.6, margin: 0, fontWeight: flipped[current] ? 400 : 500 }}>
+          {flipped[current] ? cards[current].back : cards[current].front}
+        </p>
+        <span style={{ fontSize: 12, color: "#aaa", marginTop: 16 }}>
+          {flipped[current] ? "Click to see question" : "Click to reveal answer"}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginTop: 16, justifyContent: "center", flexWrap: "wrap" }}>
+        {cards.map((_, i) => (
+          <button key={i} onClick={() => setCurrent(i)}
+            style={{ width: 28, height: 28, borderRadius: "50%", border: i === current ? "2px solid #3b82f6" : "0.5px solid #ddd", background: i === current ? "#eff6ff" : flipped[i] ? "#f0fdf4" : "#f9f9f8", color: i === current ? "#2563eb" : "#888", cursor: "pointer", fontSize: 12, fontWeight: 500 }}>
+            {i + 1}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [content, setContent] = useState(null);
   const [fileName, setFileName] = useState(null);
   const [tab, setTab] = useState("upload");
   const [text, setText] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState("Summary");
+  const [results, setResults] = useState({});
+  const [loading, setLoading] = useState(null);
   const [error, setError] = useState(null);
   const inputRef = useRef();
 
@@ -53,17 +98,19 @@ export default function App() {
     handleFile(e.dataTransfer.files[0]);
   };
 
-  const fetchSummary = async () => {
-    setLoading(true);
+  const fetchResult = async (tabName) => {
+    const task = tabName.toLowerCase();
+    if (results[task]) return;
+    setLoading(task);
     setError(null);
     try {
       let res;
       if (content.type === "pdf") {
         const formData = new FormData();
         formData.append("pdf", content.file);
-        res = await fetch(`${API_BASE}/process?task=summary`, { method: "POST", body: formData });
+        res = await fetch(`${API_BASE}/process?task=${task}`, { method: "POST", body: formData });
       } else {
-        res = await fetch(`${API_BASE}/process?task=summary`, {
+        res = await fetch(`${API_BASE}/process?task=${task}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: content.text }),
@@ -71,15 +118,23 @@ export default function App() {
       }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Request failed");
-      setResult(data.result);
+      setResults(r => ({ ...r, [task]: data.result }));
     } catch (e) {
       setError(e.message);
     } finally {
-      setLoading(false);
+      setLoading(null);
     }
   };
 
+  const handleTabClick = (t) => {
+    setActiveTab(t);
+    if (content) fetchResult(t);
+  };
+
   if (content) {
+    const currentTask = activeTab.toLowerCase();
+    const currentResult = results[currentTask];
+
     return (
       <div style={{ maxWidth: 680, margin: "0 auto", padding: "2rem 1rem" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 24 }}>
@@ -90,10 +145,19 @@ export default function App() {
 
         <div style={{ padding: "10px 14px", background: "#f5f5f3", borderRadius: 8, border: "0.5px solid #ddd", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
           <span style={{ fontSize: 13, color: "#666" }}>{fileName ? `📄 ${fileName}` : "✏️ Pasted text"}</span>
-          <button onClick={() => { setContent(null); setFileName(null); setResult(null); }}
+          <button onClick={() => { setContent(null); setFileName(null); setResults({}); }}
             style={{ fontSize: 12, color: "#999", background: "none", border: "none", cursor: "pointer" }}>
             Change ×
           </button>
+        </div>
+
+        <div style={{ display: "flex", gap: 2, marginBottom: 24, borderBottom: "0.5px solid #eee" }}>
+          {TABS.map(t => (
+            <button key={t} onClick={() => handleTabClick(t)}
+              style={{ padding: "8px 20px", background: "none", border: "none", borderBottom: activeTab === t ? "2px solid #3b82f6" : "2px solid transparent", color: activeTab === t ? "#2563eb" : "#888", fontWeight: activeTab === t ? 500 : 400, fontSize: 14, cursor: "pointer", marginBottom: -1 }}>
+              {t === "Summary" ? "📋 " : "🃏 "}{t}
+            </button>
+          ))}
         </div>
 
         {error && (
@@ -102,13 +166,18 @@ export default function App() {
           </div>
         )}
 
-        {loading ? <LoadingSpinner /> : result ? (
-          <SummaryView data={result} />
+        {loading === currentTask ? (
+          <LoadingSpinner task={currentTask} />
+        ) : currentResult ? (
+          <>
+            {currentTask === "summary" && <SummaryView data={currentResult} />}
+            {currentTask === "flashcards" && <FlashcardsView data={currentResult} />}
+          </>
         ) : (
           <div style={{ textAlign: "center", padding: "48px 24px" }}>
-            <button onClick={fetchSummary}
+            <button onClick={() => fetchResult(activeTab)}
               style={{ padding: "12px 28px", borderRadius: 8, border: "0.5px solid #ddd", background: "#eff6ff", color: "#2563eb", fontWeight: 500, fontSize: 14, cursor: "pointer" }}>
-              Generate Summary →
+              Generate {activeTab} →
             </button>
           </div>
         )}
