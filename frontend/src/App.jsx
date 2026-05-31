@@ -3,6 +3,88 @@ import { useState, useRef, useCallback } from "react";
 const API_BASE = "/api";
 const TABS = ["Summary", "Flashcards", "Quiz"];
 
+const getToken = () => sessionStorage.getItem("lectureai_token");
+const setToken = (t) => sessionStorage.setItem("lectureai_token", t);
+const clearToken = () => sessionStorage.removeItem("lectureai_token");
+
+async function apiFetch(path, options = {}) {
+  const token = getToken();
+  const headers = { ...(options.headers || {}) };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return fetch(API_BASE + path, { ...options, headers });
+}
+
+function AuthScreen({ onAuth }) {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Request failed");
+      setToken(data.token);
+      onAuth(data.email);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 400, margin: "60px auto", padding: "0 1rem" }}>
+      <div style={{ marginBottom: 32, textAlign: "center" }}>
+        <span style={{ fontSize: 36 }}>📖</span>
+        <h1 style={{ margin: "8px 0 4px", fontSize: 22, fontWeight: 500 }}>LectureAI</h1>
+        <p style={{ margin: 0, fontSize: 13, color: "#888" }}>Your AI study companion</p>
+      </div>
+      <div style={{ background: "white", border: "0.5px solid #ddd", borderRadius: 12, padding: "24px 28px" }}>
+        <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
+          {["login", "register"].map(m => (
+            <button key={m} onClick={() => { setMode(m); setError(null); }}
+              style={{ flex: 1, padding: 8, borderRadius: 8, border: mode === m ? "2px solid #3b82f6" : "0.5px solid #ddd", background: mode === m ? "#eff6ff" : "#f9f9f8", color: mode === m ? "#2563eb" : "#888", fontWeight: mode === m ? 500 : 400, cursor: "pointer", fontSize: 13 }}>
+              {m === "login" ? "Log in" : "Register"}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "grid", gap: 12 }}>
+          <div>
+            <label style={{ fontSize: 12, color: "#888", display: "block", marginBottom: 5 }}>Email</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@umd.edu"
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "0.5px solid #ddd", fontSize: 14, fontFamily: "system-ui", boxSizing: "border-box" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: "#888", display: "block", marginBottom: 5 }}>Password</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+              placeholder={mode === "register" ? "At least 8 characters" : "••••••••"}
+              onKeyDown={e => e.key === "Enter" && submit()}
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "0.5px solid #ddd", fontSize: 14, fontFamily: "system-ui", boxSizing: "border-box" }} />
+          </div>
+        </div>
+        {error && (
+          <p style={{ margin: "12px 0 0", fontSize: 13, color: "#dc2626", background: "#fef2f2", padding: "8px 12px", borderRadius: 8 }}>
+            ⚠️ {error}
+          </p>
+        )}
+        <button onClick={submit} disabled={loading || !email || !password}
+          style={{ marginTop: 16, width: "100%", padding: 10, borderRadius: 8, border: "0.5px solid #ddd", background: email && password ? "#eff6ff" : "#f5f5f5", color: email && password ? "#2563eb" : "#aaa", fontWeight: 500, fontSize: 14, cursor: email && password ? "pointer" : "not-allowed", opacity: loading ? 0.7 : 1 }}>
+          {loading ? "..." : mode === "login" ? "Log in →" : "Create account →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LoadingSpinner({ task }) {
   const msgs = { summary: "Summarizing your lecture...", flashcards: "Generating flashcards...", quiz: "Writing quiz questions..." };
   return (
@@ -69,7 +151,6 @@ function QuizView({ data }) {
   const [showResults, setShowResults] = useState(false);
   const questions = data.questions;
   const score = Object.entries(answers).filter(([i, a]) => a === questions[i].answer).length;
-
   return (
     <div>
       {questions.map((q, i) => {
@@ -100,7 +181,6 @@ function QuizView({ data }) {
           </div>
         );
       })}
-
       {!showResults ? (
         <button onClick={() => setShowResults(true)} disabled={Object.keys(answers).length < questions.length}
           style={{ padding: "10px 24px", borderRadius: 8, border: "0.5px solid #ddd", background: Object.keys(answers).length < questions.length ? "#f5f5f5" : "#eff6ff", color: Object.keys(answers).length < questions.length ? "#aaa" : "#2563eb", cursor: Object.keys(answers).length < questions.length ? "not-allowed" : "pointer", fontWeight: 500, fontSize: 14 }}>
@@ -120,6 +200,7 @@ function QuizView({ data }) {
 }
 
 export default function App() {
+  const [user, setUser] = useState(() => getToken() ? "returning" : null);
   const [content, setContent] = useState(null);
   const [fileName, setFileName] = useState(null);
   const [tab, setTab] = useState("upload");
@@ -154,14 +235,15 @@ export default function App() {
       if (content.type === "pdf") {
         const formData = new FormData();
         formData.append("pdf", content.file);
-        res = await fetch(`${API_BASE}/process?task=${task}`, { method: "POST", body: formData });
+        res = await apiFetch(`/process?task=${task}`, { method: "POST", body: formData });
       } else {
-        res = await fetch(`${API_BASE}/process?task=${task}`, {
+        res = await apiFetch(`/process?task=${task}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: content.text }),
         });
       }
+      if (res.status === 401) { clearToken(); setUser(null); return; }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Request failed");
       setResults(r => ({ ...r, [task]: data.result }));
@@ -177,23 +259,28 @@ export default function App() {
     if (content) fetchResult(t);
   };
 
+  const logout = () => { clearToken(); setUser(null); setContent(null); setResults({}); };
+
+  if (!user) return <AuthScreen onAuth={(email) => setUser(email)} />;
+
   if (content) {
     const currentTask = activeTab.toLowerCase();
     const currentResult = results[currentTask];
     return (
       <div style={{ maxWidth: 680, margin: "0 auto", padding: "2rem 1rem" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 24 }}>
-          <span style={{ fontSize: 22 }}>📖</span>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 500 }}>LectureAI</h1>
-          <span style={{ fontSize: 13, color: "#999" }}>AI Study Companion</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <span style={{ fontSize: 22 }}>📖</span>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 500 }}>LectureAI</h1>
+            <span style={{ fontSize: 13, color: "#999" }}>AI Study Companion</span>
+          </div>
+          <button onClick={logout} style={{ fontSize: 12, color: "#999", background: "none", border: "0.5px solid #ddd", borderRadius: 8, cursor: "pointer", padding: "5px 10px" }}>Log out</button>
         </div>
 
         <div style={{ padding: "10px 14px", background: "#f5f5f3", borderRadius: 8, border: "0.5px solid #ddd", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
           <span style={{ fontSize: 13, color: "#666" }}>{fileName ? `📄 ${fileName}` : "✏️ Pasted text"}</span>
           <button onClick={() => { setContent(null); setFileName(null); setResults({}); }}
-            style={{ fontSize: 12, color: "#999", background: "none", border: "none", cursor: "pointer" }}>
-            Change ×
-          </button>
+            style={{ fontSize: 12, color: "#999", background: "none", border: "none", cursor: "pointer" }}>Change ×</button>
         </div>
 
         <div style={{ display: "flex", gap: 2, marginBottom: 24, borderBottom: "0.5px solid #eee" }}>
@@ -211,9 +298,7 @@ export default function App() {
           </div>
         )}
 
-        {loading === currentTask ? (
-          <LoadingSpinner task={currentTask} />
-        ) : currentResult ? (
+        {loading === currentTask ? <LoadingSpinner task={currentTask} /> : currentResult ? (
           <>
             {currentTask === "summary" && <SummaryView data={currentResult} />}
             {currentTask === "flashcards" && <FlashcardsView data={currentResult} />}
@@ -233,15 +318,16 @@ export default function App() {
 
   return (
     <div style={{ maxWidth: 560, margin: "60px auto", padding: "0 1rem" }}>
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
-          <span style={{ fontSize: 22 }}>📖</span>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 500 }}>LectureAI</h1>
-          <span style={{ fontSize: 13, color: "#999" }}>AI Study Companion</span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
+            <span style={{ fontSize: 22 }}>📖</span>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 500 }}>LectureAI</h1>
+            <span style={{ fontSize: 13, color: "#999" }}>AI Study Companion</span>
+          </div>
+          <p style={{ margin: 0, fontSize: 13, color: "#666" }}>Upload lecture slides or paste notes to get summaries, flashcards, and quizzes.</p>
         </div>
-        <p style={{ margin: 0, fontSize: 13, color: "#666" }}>
-          Upload lecture slides or paste notes to get summaries, flashcards, and quizzes.
-        </p>
+        <button onClick={logout} style={{ fontSize: 12, color: "#999", background: "none", border: "0.5px solid #ddd", borderRadius: 8, cursor: "pointer", padding: "5px 10px" }}>Log out</button>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -254,25 +340,18 @@ export default function App() {
       </div>
 
       {tab === "upload" ? (
-        <div
-          onDragOver={e => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={handleDrop}
-          onClick={() => inputRef.current.click()}
+        <div onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={handleDrop} onClick={() => inputRef.current.click()}
           style={{ border: `2px dashed ${dragging ? "#3b82f6" : "#ccc"}`, borderRadius: 12, padding: "48px 24px", textAlign: "center", cursor: "pointer", background: dragging ? "#eff6ff" : "#fafaf9", transition: "all 0.15s ease" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📚</div>
           <p style={{ fontWeight: 500, margin: "0 0 4px" }}>Drop your PDF here or click to browse</p>
           <p style={{ fontSize: 13, color: "#888", margin: 0 }}>Lecture slides, notes, readings — any PDF works</p>
-          <input ref={inputRef} type="file" accept=".pdf" style={{ display: "none" }}
-            onChange={e => handleFile(e.target.files[0])} />
+          <input ref={inputRef} type="file" accept=".pdf" style={{ display: "none" }} onChange={e => handleFile(e.target.files[0])} />
         </div>
       ) : (
         <div>
-          <textarea value={text} onChange={e => setText(e.target.value)}
-            placeholder="Paste your lecture notes here..."
+          <textarea value={text} onChange={e => setText(e.target.value)} placeholder="Paste your lecture notes here..."
             style={{ width: "100%", height: 220, resize: "vertical", padding: "14px 16px", borderRadius: 8, border: "0.5px solid #ddd", fontSize: 14, lineHeight: 1.6, fontFamily: "system-ui", boxSizing: "border-box" }} />
-          <button onClick={() => text.trim() && setContent({ type: "text", text })}
-            disabled={!text.trim()}
+          <button onClick={() => text.trim() && setContent({ type: "text", text })} disabled={!text.trim()}
             style={{ marginTop: 10, padding: "10px 24px", borderRadius: 8, border: "0.5px solid #ddd", background: text.trim() ? "#eff6ff" : "#f5f5f5", color: text.trim() ? "#2563eb" : "#aaa", cursor: text.trim() ? "pointer" : "not-allowed", fontWeight: 500, fontSize: 14 }}>
             Analyze Text →
           </button>
