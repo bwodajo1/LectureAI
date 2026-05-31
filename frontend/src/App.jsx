@@ -2,12 +2,42 @@ import { useState, useRef, useCallback } from "react";
 
 const API_BASE = "/api";
 
+function LoadingSpinner() {
+  return (
+    <div style={{ textAlign: "center", padding: "48px 24px" }}>
+      <div style={{ width: 40, height: 40, margin: "0 auto 16px", border: "3px solid #eee", borderTop: "3px solid #3b82f6", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <p style={{ color: "#888", fontSize: 14, margin: 0 }}>Summarizing your lecture...</p>
+    </div>
+  );
+}
+
+function SummaryView({ data }) {
+  return (
+    <div>
+      <h2 style={{ fontSize: 20, fontWeight: 500, margin: "0 0 8px" }}>{data.title}</h2>
+      <p style={{ color: "#555", margin: "0 0 24px", lineHeight: 1.6 }}>{data.overview}</p>
+      <div style={{ display: "grid", gap: 10 }}>
+        {data.key_points.map((pt, i) => (
+          <div key={i} style={{ display: "flex", gap: 12, padding: "12px 16px", background: "#f9f9f8", borderRadius: 8, border: "0.5px solid #eee" }}>
+            <span style={{ minWidth: 24, height: 24, borderRadius: "50%", background: "#eff6ff", color: "#2563eb", fontSize: 12, fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
+            <span style={{ fontSize: 14, lineHeight: 1.5 }}>{pt}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [content, setContent] = useState(null);
   const [fileName, setFileName] = useState(null);
   const [tab, setTab] = useState("upload");
   const [text, setText] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const inputRef = useRef();
 
   const handleFile = useCallback((file) => {
@@ -23,23 +53,65 @@ export default function App() {
     handleFile(e.dataTransfer.files[0]);
   };
 
+  const fetchSummary = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      let res;
+      if (content.type === "pdf") {
+        const formData = new FormData();
+        formData.append("pdf", content.file);
+        res = await fetch(`${API_BASE}/process?task=summary`, { method: "POST", body: formData });
+      } else {
+        res = await fetch(`${API_BASE}/process?task=summary`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: content.text }),
+        });
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Request failed");
+      setResult(data.result);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (content) {
     return (
       <div style={{ maxWidth: 680, margin: "0 auto", padding: "2rem 1rem" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 24 }}>
           <span style={{ fontSize: 22 }}>📖</span>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 500 }}>LectureAI</h1>
+          <span style={{ fontSize: 13, color: "#999" }}>AI Study Companion</span>
         </div>
-        <div style={{ padding: "12px 16px", background: "#f5f5f3", borderRadius: 8, border: "0.5px solid #ddd", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontSize: 13, color: "#666" }}>
-            {fileName ? `📄 ${fileName}` : "✏️ Pasted text"}
-          </span>
-          <button onClick={() => { setContent(null); setFileName(null); }}
+
+        <div style={{ padding: "10px 14px", background: "#f5f5f3", borderRadius: 8, border: "0.5px solid #ddd", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+          <span style={{ fontSize: 13, color: "#666" }}>{fileName ? `📄 ${fileName}` : "✏️ Pasted text"}</span>
+          <button onClick={() => { setContent(null); setFileName(null); setResult(null); }}
             style={{ fontSize: 12, color: "#999", background: "none", border: "none", cursor: "pointer" }}>
             Change ×
           </button>
         </div>
-        <p style={{ marginTop: 40, color: "#999", textAlign: "center" }}>Results coming in the next commit...</p>
+
+        {error && (
+          <div style={{ padding: "12px 16px", background: "#fef2f2", border: "0.5px solid #fca5a5", borderRadius: 8, marginBottom: 20 }}>
+            <p style={{ margin: 0, fontSize: 13, color: "#dc2626" }}>⚠️ {error}</p>
+          </div>
+        )}
+
+        {loading ? <LoadingSpinner /> : result ? (
+          <SummaryView data={result} />
+        ) : (
+          <div style={{ textAlign: "center", padding: "48px 24px" }}>
+            <button onClick={fetchSummary}
+              style={{ padding: "12px 28px", borderRadius: 8, border: "0.5px solid #ddd", background: "#eff6ff", color: "#2563eb", fontWeight: 500, fontSize: 14, cursor: "pointer" }}>
+              Generate Summary →
+            </button>
+          </div>
+        )}
       </div>
     );
   }
